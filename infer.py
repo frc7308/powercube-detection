@@ -3,6 +3,7 @@
 
 """
 Classify an image using individual model files
+
 Use this script as an example to build your own tool
 """
 
@@ -22,9 +23,11 @@ from caffe.proto import caffe_pb2
 def get_net(caffemodel, deploy_file, use_gpu=True):
     """
     Returns an instance of caffe.Net
+
     Arguments:
     caffemodel -- path to a .caffemodel file
     deploy_file -- path to a .prototxt file
+
     Keyword arguments:
     use_gpu -- if True, use the GPU for inference
     """
@@ -37,8 +40,10 @@ def get_net(caffemodel, deploy_file, use_gpu=True):
 def get_transformer(deploy_file, mean_file=None):
     """
     Returns an instance of caffe.io.Transformer
+
     Arguments:
     deploy_file -- path to a .prototxt file
+
     Keyword arguments:
     mean_file -- path to a .binaryproto file (optional)
     """
@@ -79,24 +84,47 @@ def get_transformer(deploy_file, mean_file=None):
 
     return t
 
-def forward_pass(image, net, transformer):
+def load_image(image, height, width, mode='RGB'):
+    """
+    Load an image from disk
+
+    Returns an np.ndarray (channels x width x height)
+
+    Arguments:
+    path -- path to an image on disk
+    width -- resize dimension
+    height -- resize dimension
+
+    Keyword arguments:
+    mode -- the PIL mode that the image should be converted to
+        (RGB for color or L for grayscale)
+    """
+    # squash
+    image = scipy.misc.imresize(image, (height, width), 'bilinear')
+    return image
+
+def forward_pass(images, net, transformer, batch_size=None):
     """
     Returns scores for each image as an np.ndarray (nImages x nClasses)
+
     Arguments:
     images -- a list of np.ndarrays
     net -- a caffe.Net
     transformer -- a caffe.io.Transformer
+
     Keyword arguments:
     batch_size -- how many images can be processed at once
         (a high value may result in out-of-memory errors)
     """
-    batch_size = 1
+    if batch_size is None:
+        batch_size = 1
 
     caffe_images = []
-    if image.ndim == 2:
-        caffe_images.append(image[:,:,np.newaxis])
-    else:
-        caffe_images.append(image)
+    for image in images:
+        if image.ndim == 2:
+            caffe_images.append(image[:,:,np.newaxis])
+        else:
+            caffe_images.append(image)
 
     dims = transformer.inputs['data'][1:]
 
@@ -118,26 +146,55 @@ def forward_pass(image, net, transformer):
 
     return scores
 
-def classify(caffemodel, deploy_file, image,
+def read_labels(labels_file):
+    """
+    Returns a list of strings
+
+    Arguments:
+    labels_file -- path to a .txt file
+    """
+    if not labels_file:
+        return None
+
+    labels = []
+    with open(labels_file) as infile:
+        for line in infile:
+            label = line.strip()
+            if label:
+                labels.append(label)
+    assert len(labels), 'No labels found'
+    return labels
+
+def classify(caffemodel, deploy_file, image_file,
         mean_file=None, labels_file=None, batch_size=None, use_gpu=True):
     """
     Classify some images against a Caffe model and print the results
+
     Arguments:
     caffemodel -- path to a .caffemodel
     deploy_file -- path to a .prototxt
     image_files -- list of paths to images
+
     Keyword arguments:
     mean_file -- path to a .binaryproto
     labels_file path to a .txt file
     use_gpu -- if True, run inference on the GPU
     """
     # Load the model and images
-    net = get_net(caffemodel, deploy_file, True)
+    net = get_net(caffemodel, deploy_file, use_gpu)
     transformer = get_transformer(deploy_file, mean_file)
     _, channels, height, width = transformer.inputs['data']
+    if channels == 3:
+        mode = 'RGB'
+    elif channels == 1:
+        mode = 'L'
+    else:
+        raise ValueError('Invalid number for channels: %s' % channels)
+    images = [load_image(image_file, height, width, mode)]
+    labels = read_labels(labels_file)
 
     # Classify the image
-    scores = forward_pass(image, net, transformer)
+    scores = forward_pass(images, net, transformer, batch_size=batch_size)
 
     ### Process the results
 
@@ -148,7 +205,8 @@ def classify(caffemodel, deploy_file, image,
             if confidence == 0:
                 continue
 
-            return [(int(round(left)), int(round(top))), (int(round(right)), int(round(bottom))), confidence]
+            return (int(round(left)), int(round(top))), (int(round(right)), int(round(bottom))), confidence
+
 
 if __name__ == '__main__':
     script_start_time = time.time()
@@ -179,5 +237,3 @@ if __name__ == '__main__':
 
     classify(args['caffemodel'], args['deploy_file'], args['image_file'],
             args['mean'], args['labels'], args['batch_size'], not args['nogpu'])
-
-    print 'Script took %f seconds.' % (time.time() - script_start_time,)
